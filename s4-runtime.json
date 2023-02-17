@@ -1,0 +1,24 @@
+{
+  "target": "bmv2",
+  "p4info": "build/hw2.p4.p4info.txt",
+  "bmv2_json": "build/hw2.json",
+  "table_entries": [
+    {
+      "table": "MyIngress.ipv4_exact",
+      "default_action": true,
+      "action_name": "MyIngress.drop",
+      "action_params": {}
+    },
+    {
+      "table": "MyIngress.ipv4_exact",
+      "match": {
+        "hdr.ipv4.dstAddr": "10.0.2.2"
+      },
+      "action_name": "MyIngress.ipv4_forward",
+      "action_params": {
+        "nhop_dmac": "08:00:00:00:02:22",
+        "egress_port": 2
+      }
+    }
+  ]
+}

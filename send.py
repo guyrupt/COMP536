@@ -3,8 +3,18 @@ import random
 import socket
 import sys
 
-from scapy.all import IP, TCP, Ether, get_if_hwaddr, get_if_list, sendp
+from scapy.all import Packet, ShortField, BitField, IP, TCP, Ether, get_if_hwaddr, get_if_list, sendp, bind_layers
 
+class Record(Packet):
+    name = "record"
+    fields_desc = [
+                    ShortField("first_hop", 1),
+                    ShortField("protocol", 0)
+    ]
+                   
+
+bind_layers(Ether, Record, type=0x1234)
+bind_layers(Record, IP, protocol=0x0800)
 
 def get_if():
     ifs=get_if_list()
@@ -28,7 +38,8 @@ def main():
     iface = get_if()
 
     print("sending on interface %s to %s" % (iface, str(addr)))
-    pkt =  Ether(src=get_if_hwaddr(iface), dst='ff:ff:ff:ff:ff:ff')
+    pkt =  Ether(src=get_if_hwaddr(iface), dst='ff:ff:ff:ff:ff:ff', type=0x1234)
+    pkt = pkt / Record(first_hop=1)
     pkt = pkt /IP(dst=addr) / TCP(dport=1234, sport=random.randint(49152,65535)) / sys.argv[2]
     pkt.show2()
     sendp(pkt, iface=iface, verbose=False)
