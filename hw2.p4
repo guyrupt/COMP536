@@ -23,6 +23,12 @@ header record_t {
     bit<16> etherType;
 }
 
+header query_t {
+    bit<8> first;
+    bit<32> s1_p2_byte_cnt;
+    bit<32> s1_p3_byte_cnt;
+}
+
 header ipv4_t {
     bit<4>    version;
     bit<4>    ihl;
@@ -68,6 +74,7 @@ struct metadata {
 // header stack, add all the headers you plan to use here.
 struct headers {
     ethernet_t   ethernet;
+    query_t     query;
     record_t     record;
     ipv4_t       ipv4;
     tcp_t        tcp;
@@ -91,9 +98,14 @@ parser MyParser(packet_in packet,
 	    transition select(hdr.ethernet.etherType) {
             TYPE_IPV4: parse_ipv4;
             0x1234: parse_record;
+            0x812: parse_query;
         }
 	}
-	// transition parse_ipv4;
+	
+    state parse_query{
+        packet.extract(hdr.query);
+        transition accept;
+    }
 
     state parse_record{
         packet.extract(hdr.record);
@@ -134,25 +146,40 @@ control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
 control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
+    
+    register<bit<32>>(8) byte_cnt_reg;
+    register<bit<14>>(1) pkt_cnt_reg; // per-packet counter
+
     action drop() {
         mark_to_drop(standard_metadata);
     }
 
     action set_ecmp_select(bit<14> ecmp_base, bit<14> ecmp_count) {
-        hash(meta.ecmp_select,
-            HashAlgorithm.crc16,
-            ecmp_base,
-            { hdr.ipv4.srcAddr,
-              hdr.ipv4.dstAddr,
-              hdr.tcp.srcPort,
-              hdr.tcp.dstPort },
-            ecmp_count);
+        // per-flow
+        
+        // hash(meta.ecmp_select,
+        //     HashAlgorithm.crc16,
+        //     ecmp_base,
+        //     { hdr.ipv4.srcAddr,
+        //       hdr.ipv4.dstAddr,
+        //       hdr.ipv4.protocol,
+        //       hdr.tcp.srcPort,
+        //       hdr.tcp.dstPort },
+        //     ecmp_count);
+
+        // per-packet 
+
+        bit<14> pkt_cnt;
+        pkt_cnt_reg.read(pkt_cnt, 0);
+        meta.ecmp_select = pkt_cnt % 2;
+        pkt_cnt_reg.write(0, pkt_cnt + 1);
+
     }
 
     action set_nhop(macAddr_t nhop_dmac, egressSpec_t egress_port) {
         hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
         hdr.ethernet.dstAddr = nhop_dmac;
-        hdr.ethernet.etherType = TYPE_IPV4;
+        hdr.ethernet.etherType = TYPE_IPV4; // remove the record header
         standard_metadata.egress_spec = egress_port;
         hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
@@ -194,13 +221,29 @@ control MyIngress(inout headers hdr,
         size = 1024;
     }
 
+
     apply {
         if (hdr.ethernet.etherType == 0x1234 && hdr.record.isValid() && hdr.ipv4.isValid() && hdr.tcp.isValid() && hdr.ipv4.ttl > 0) {
             ecmp_group.apply();
             ecmp_nhop.apply();
+            bit<32> byte_cnt;
+            byte_cnt_reg.read(byte_cnt, (bit<32>)standard_metadata.egress_spec - 2); // map port 2 to index 0, port 3 to index 1
+            byte_cnt = byte_cnt + standard_metadata.packet_length;
+            byte_cnt_reg.write((bit<32>)standard_metadata.egress_spec - 2, byte_cnt);
         }
         else if (hdr.ethernet.etherType == TYPE_IPV4 && hdr.ipv4.isValid() && hdr.tcp.isValid() && hdr.ipv4.ttl > 0) {
             ipv4_exact.apply();
+        }
+        else if (hdr.ethernet.etherType == 0x812 && hdr.query.isValid()) {
+            standard_metadata.egress_spec = (bit<9>)2;
+            if (hdr.query.first == 1) {
+                bit<32> byte_cnt;
+                byte_cnt_reg.read(byte_cnt, (bit<32>)0); // port 2
+                hdr.query.s1_p2_byte_cnt = byte_cnt;
+                byte_cnt_reg.read(byte_cnt, (bit<32>)1); // port 3
+                hdr.query.s1_p3_byte_cnt = byte_cnt;
+                hdr.query.first = 0;
+            }   
         }
     }
 }
@@ -248,6 +291,7 @@ control MyDeparser(packet_out packet, in headers hdr) {
     apply {
         // Remove the Record header
         packet.emit(hdr.ethernet);
+        packet.emit(hdr.query);
         packet.emit(hdr.ipv4);
         packet.emit(hdr.tcp);
     }

@@ -10,10 +10,11 @@ from scapy.all import (
     IPOption,
     ShortField,
     get_if_list,
-    sniff
+    sniff,
+    Raw
 )
 from scapy.layers.inet import _IPOption_HDR
-
+from send_query import Query
 
 def get_if():
     ifs=get_if_list()
@@ -39,11 +40,23 @@ class IPOption_MRI(IPOption):
                                    [],
                                    IntField("", 0),
                                    length_from=lambda pkt:pkt.count*4) ]
+
+
+order = []
+
 def handle_pkt(pkt):
     if TCP in pkt and pkt[TCP].dport == 1234:
         print("got a packet")
         pkt.show2()
     #    hexdump(pkt)
+        if pkt[Raw].load.isdigit():
+            order.append(int(pkt[Raw].load))
+            if len(order) == 1000:
+                print("Order: ", order)
+        sys.stdout.flush()
+    elif Query in pkt:
+        print("got a query")
+        pkt.show2()
         sys.stdout.flush()
 
 
