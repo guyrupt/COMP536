@@ -66,6 +66,9 @@ define a metadata is the same as defining a header field.
 struct metadata {
     /* empty */
     bit<14> ecmp_select;
+    bit<14> flowlet_register_index;
+    bit<48> flowlet_last_stamp;
+    bit<14> flowlet_id;
 }
 
 // There exists predefined standard_metadata with critical functionalities
@@ -147,15 +150,24 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
     
+    
+    // regs for counting bytes to each port
     register<bit<32>>(8) byte_cnt_reg;
+
+    // regs for per-packet 
     register<bit<14>>(1) pkt_cnt_reg; // per-packet counter
+    
+    // regs for flowlet-switching
+    register<bit<14>>(8192) flowlet_to_id; 
+    register<bit<48>>(8192) flowlet_time_stamp;
 
     action drop() {
         mark_to_drop(standard_metadata);
     }
 
-    action set_ecmp_select(bit<14> ecmp_base, bit<14> ecmp_count) {
-        // per-flow
+    action set_ecmp_select(bit<14> ecmp_base, bit<14> ecmp_count) { 
+        // Uncomment one of the three forwarding methods
+        // 1. per-flow -----------------------------
         
         // hash(meta.ecmp_select,
         //     HashAlgorithm.crc16,
@@ -166,15 +178,34 @@ control MyIngress(inout headers hdr,
         //       hdr.tcp.srcPort,
         //       hdr.tcp.dstPort },
         //     ecmp_count);
+        // ----------------------------------------
 
-        // per-packet 
+        // 2. per-packet ---------------------------
 
-        bit<14> pkt_cnt;
-        pkt_cnt_reg.read(pkt_cnt, 0);
-        meta.ecmp_select = pkt_cnt % 2;
-        pkt_cnt_reg.write(0, pkt_cnt + 1);
+        // bit<14> pkt_cnt;
+        // pkt_cnt_reg.read(pkt_cnt, 0);
+        // meta.ecmp_select = pkt_cnt % 2;
+        // pkt_cnt_reg.write(0, pkt_cnt + 1);
+        // ----------------------------------------
 
+        // 3. flowlet-switching --------------------
+        hash(meta.flowlet_register_index, 
+            HashAlgorithm.crc16,
+            ecmp_base,
+            { hdr.ipv4.srcAddr, hdr.ipv4.dstAddr, hdr.tcp.srcPort, hdr.tcp.dstPort,hdr.ipv4.protocol},
+            (bit<14>)8192);
+        
+        // read last time stamp
+        flowlet_time_stamp.read(meta.flowlet_last_stamp, (bit<32>)meta.flowlet_register_index);
+
+        // read last flowlet id
+        flowlet_to_id.read(meta.flowlet_id, (bit<32>)meta.flowlet_register_index);
+        // ----------------------------------------
+
+        
     }
+
+    
 
     action set_nhop(macAddr_t nhop_dmac, egressSpec_t egress_port) {
         hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
@@ -224,8 +255,27 @@ control MyIngress(inout headers hdr,
 
     apply {
         if (hdr.ethernet.etherType == 0x1234 && hdr.record.isValid() && hdr.ipv4.isValid() && hdr.tcp.isValid() && hdr.ipv4.ttl > 0) {
+            // *** Comment out one of the sections below to test different forwarding methods ***
+            // Milestone 1 & 2 --------------------------------------------------------------
+            // ecmp_group.apply();
+            // ecmp_nhop.apply();
+            // -----------------------------------------------------------------------------
+
+            // Milestone 3 (flowlet-switching) ---------------------------------------------------------------
             ecmp_group.apply();
+            bit<48> time_diff = standard_metadata.ingress_global_timestamp - meta.flowlet_last_stamp;        
+            if (time_diff > (bit<48>)5000000) // 5ms = 5000000ns
+            {
+                meta.flowlet_id = meta.flowlet_id + 1;
+                flowlet_to_id.write((bit<32>)meta.flowlet_register_index, (bit<14>)meta.flowlet_id);
+            }
+
+            meta.ecmp_select = meta.flowlet_id % 2;
+            // update time stamp
+            flowlet_time_stamp.write((bit<32>)meta.flowlet_register_index, standard_metadata.ingress_global_timestamp);
             ecmp_nhop.apply();
+            // -----------------------------------------------------------------------------
+
             bit<32> byte_cnt;
             byte_cnt_reg.read(byte_cnt, (bit<32>)standard_metadata.egress_spec - 2); // map port 2 to index 0, port 3 to index 1
             byte_cnt = byte_cnt + standard_metadata.packet_length;

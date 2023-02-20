@@ -51,8 +51,6 @@ def handle_pkt(pkt):
     #    hexdump(pkt)
         if pkt[Raw].load.isdigit():
             order.append(int(pkt[Raw].load))
-            if len(order) == 1000:
-                print("Order: ", order)
         sys.stdout.flush()
     elif Query in pkt:
         print("got a query")
@@ -67,6 +65,10 @@ def main():
     sys.stdout.flush()
     sniff(iface = iface,
           prn = lambda x: handle_pkt(x))
+    if order:
+        f = open("order.txt", "w")
+        f.write(",".join(str(x) for x in order))
+        f.close()
 
 if __name__ == '__main__':
     main()

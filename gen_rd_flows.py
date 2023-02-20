@@ -43,13 +43,16 @@ def main():
 
 
     print("sending on interface %s to %s" % (iface, str(addr)))
+    packets = []
     for i in range(1000):
         pkt =  Ether(src=get_if_hwaddr(iface), dst='ff:ff:ff:ff:ff:ff', type=0x1234)
         pkt = pkt / Record(first_hop=1)
         pkt = pkt /IP(dst=addr) / TCP(dport=1234, sport=pre_defined_rd_port[i]) / ("Hi" * pre_defined_rd_l[i])
-        pkt.show2()
-        print(f"Sending packet {i}...")
-        sendp(pkt, iface=iface, verbose=False)
+        # pkt.show2()
+        # print(f"Sending packet {i}...")
+        packets.append(pkt)
+    
+    sendp(packets, iface=iface, verbose=False)
 
     
     send_query()
